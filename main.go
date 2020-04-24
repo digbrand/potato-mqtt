@@ -1,7 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"github.com/digbrand/potato-mqtt/broker"
+)
 
 func main() {
-	fmt.Println("ok")
+	broker.NewBroker().Start()
 }
