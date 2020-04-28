@@ -16,6 +16,7 @@ func TestClusterListen(t *testing.T) {
 			Port: 8082,
 		}},
 	}).StartTCPListen()
+
 	time.Sleep(time.Second)
 	go NewBroker(&Config{
 		TcpPort: 8082,
@@ -53,16 +54,58 @@ func beginClient(clientId string, port int) mqtt.Client {
 	return client
 }
 
-func TestClientListen(t *testing.T) {
+func TestClientPublish(t *testing.T) {
 	go NewBroker(&Config{
 		TcpPort: 8089,
 	}).StartTCPListen()
 	time.Sleep(time.Second)
 
-	client1 := beginClient("client1", 8089)
+	opts := mqtt.NewClientOptions().AddBroker("tcp://localhost:8089").SetUsername("test").SetClientID("client1")
 
-	if token := client1.Publish("ab", 0, false, "hello world"); token.Wait() && token.Error() != nil {
-		t.Fatal(token.Error())
+	client := mqtt.NewClient(opts)
+	if token := client.Connect(); token.Wait() && token.Error() != nil {
+		panic(token.Error())
 	}
+
+	//if token := client.Subscribe("ab", 0, func(c mqtt.Client, message mqtt.Message) {
+	//	fmt.Println("clientId:", clientId, " sub:", string(message.Payload()))
+	//}); token.Wait() && token.Error() != nil {
+	//	panic(token.Error())
+	//}
+
+	//if token := client1.Publish("ab", 0, false, "hello world"); token.Wait() && token.Error() != nil {
+	//	t.Fatal(token.Error())
+	//}
+	time.Sleep(time.Second)
+}
+
+func TestClient(t *testing.T) {
+	go NewBroker(&Config{
+		TcpPort: 8089,
+	}).StartTCPListen()
+	time.Sleep(time.Second)
+
+	opts := mqtt.NewClientOptions().AddBroker("tcp://localhost:8089").SetUsername("test").SetClientID("client1")
+
+	client := mqtt.NewClient(opts)
+	if token := client.Connect(); token.Wait() && token.Error() != nil {
+		panic(token.Error())
+	}
+
+	if token := client.SubscribeMultiple(nil, func(c mqtt.Client, message mqtt.Message) {
+		fmt.Println(string(message.Payload()))
+	}); token.Wait() && token.Error() != nil {
+		panic(token.Error())
+	}
+
+	//if token := client.SubscribeMultiple(map[string]byte{
+	//	"/a/b":  0,
+	//	"a/b/+/c": 2,
+	//}, func(c mqtt.Client, message mqtt.Message) {
+	//	fmt.Println(string(message.Payload()))
+	//}); token.Wait() && token.Error() != nil {
+	//	panic(token.Error())
+	//}
+
 	time.Sleep(time.Second)
 }

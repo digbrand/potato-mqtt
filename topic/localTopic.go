@@ -2,32 +2,32 @@ package topic
 
 import (
 	"errors"
-	"github.com/digbrand/potato-mqtt/broker"
 	cmap "github.com/orcaman/concurrent-map"
+	"math/rand"
+	"regexp"
+	"strings"
 	"sync"
+	"time"
 )
 
 const (
-	_GroupTopicRegexp = `^\$share/([0-9a-zA-Z_-]+)/(.*)$`
+	ShareGroupCompile = `^\$share/([0-9a-zA-Z_-]+)/(.+)$`
+)
+
+var (
+	groupRegExp = regexp.MustCompile(ShareGroupCompile)
 )
 
 /**
-struct a subscribe tree,store subscribe client and path
+struct a Subscribe tree,store Subscribe Client and path
 */
-type SubscribeTree struct {
+type LocalTree struct {
 	tree *ConcurrentTree
 	lock sync.RWMutex
 }
 
-type SubscribeThing struct {
-	Id        string
-	client    *broker.Client
-	share     bool   //是否共享订阅
-	groupName string //订阅组名称
-}
-
-func newSubscribeTree() *SubscribeTree {
-	return &SubscribeTree{
+func newLocalTree() *LocalTree {
+	return &LocalTree{
 		tree: NewTree("root"),
 		lock: sync.RWMutex{},
 	}
@@ -109,7 +109,7 @@ func findFirstTopicPart(str string) (node string, other string, err error) {
 /**
 give a topic array,tree will add all nodes
 */
-func (st *SubscribeTree) addNodes(ts []string, dataKey string, dataVal *SubscribeThing) {
+func (st *LocalTree) AddNodes(ts []string, dataKey string, dataVal *SubscribeThing) {
 	st.lock.Lock()
 	defer st.lock.Unlock()
 
@@ -126,7 +126,7 @@ func (st *SubscribeTree) addNodes(ts []string, dataKey string, dataVal *Subscrib
 	current.addDataItem(dataKey, dataVal)
 }
 
-func (st *SubscribeTree) GetSubscribers(topic string) (map[string]*SubscribeThing, error) {
+func (st *LocalTree) GetSubscribers(topic string) (map[string]*SubscribeThing, error) {
 	arr, err := getTopicArray(topic)
 	if err != nil {
 		return nil, err
@@ -134,6 +134,7 @@ func (st *SubscribeTree) GetSubscribers(topic string) (map[string]*SubscribeThin
 
 	nodes := make([]*TreeNode, 0)
 	getMatches(arr, st.tree.root.childs, &nodes)
+
 	mp := make(map[string]*SubscribeThing)
 
 	for _, v := range nodes {
@@ -144,7 +145,11 @@ func (st *SubscribeTree) GetSubscribers(topic string) (map[string]*SubscribeThin
 			mp[item.Key] = item.Val.(*SubscribeThing)
 		}
 	}
-	return mp, nil
+
+	if mp != nil {
+		return clearSubscribers(mp), nil
+	}
+	return nil, nil
 }
 
 func getMatches(ts []string, childs cmap.ConcurrentMap, arr *[]*TreeNode) {
@@ -162,13 +167,86 @@ func getMatches(ts []string, childs cmap.ConcurrentMap, arr *[]*TreeNode) {
 }
 
 /**
-client subscribe topic
+Client Subscribe topic
 */
-func (st *SubscribeTree) subscribe(topic string, thing *SubscribeThing) error {
+func (st *LocalTree) Subscribe(topic string, thing *SubscribeThing) error {
+	if strings.HasPrefix(topic, "$share/") {
+		parts := groupRegExp.FindStringSubmatch(topic)
+		if parts == nil {
+			return errors.New("topic is share group,but format failure")
+		}
+		thing.share = true
+		thing.groupName = parts[1]
+		thing.Id = thing.Id + "|" + thing.groupName
+		topic = parts[2]
+	}
+
 	arr, err := getTopicArray(topic)
 	if err != nil {
 		return err
 	}
-	st.addNodes(arr, thing.Id, thing)
+
+	st.AddNodes(arr, thing.Id, thing)
 	return nil
+}
+
+/**
+handle subscribers share group,and handle repetition thingId,prevent send message
+twice or more
+*/
+func clearSubscribers(mp map[string]*SubscribeThing) map[string]*SubscribeThing {
+	rx := regexp.MustCompile("^(.+)\\|(.+)$")
+	grp := make(map[string]map[string]*SubscribeThing)
+	normal := make(map[string]*SubscribeThing)
+
+	for k, v := range mp {
+		arr := rx.FindStringSubmatch(k)
+		//this is share group thing
+		if arr != nil {
+			a, ok := grp[arr[2]]
+			if !ok {
+				a = make(map[string]*SubscribeThing)
+				grp[arr[2]] = a
+			}
+			a[arr[1]] = v
+			continue
+		}
+		normal[k] = v
+	}
+	//if thing exists share and normal same time,remove from share
+	for _, v := range grp {
+		for x, _ := range v {
+			_, ok := normal[x]
+			if ok {
+				delete(v, x)
+			}
+		}
+	}
+
+	//remove null group and merge group thing to normal thing
+	for k, v := range grp {
+		if len(v) == 0 {
+			delete(grp, k)
+			continue
+		}
+		ln := len(v)
+		rand.Seed(time.Now().UnixNano())
+		t, o := getMapValueByIndex(v, rand.Intn(ln))
+		if o != nil {
+			normal[t] = o
+		}
+	}
+
+	return normal
+}
+
+func getMapValueByIndex(mp map[string]*SubscribeThing, index int) (string, *SubscribeThing) {
+	i := 0
+	for k, v := range mp {
+		if i == index {
+			return k, v
+		}
+		i++
+	}
+	return "", nil
 }

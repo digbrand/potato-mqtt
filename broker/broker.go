@@ -2,28 +2,29 @@ package broker
 
 import (
 	"fmt"
+	"github.com/digbrand/potato-mqtt/topic"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/eclipse/paho.mqtt.golang/packets"
 	"github.com/gin-gonic/gin"
+	cmap "github.com/orcaman/concurrent-map"
+	"go.uber.org/zap"
 	"log"
 	"net"
 	"sync"
 )
 
 type Broker struct {
-	clients      *sync.Map
-	topicManager *topicManager
+	clients      cmap.ConcurrentMap
+	topicManager topic.Manager
 	config       *Config
-	cls          *cluster
 }
 
 func NewBroker(config *Config) *Broker {
 	b := &Broker{
-		clients:      &sync.Map{},
+		clients:      cmap.New(),
 		config:       config,
-		topicManager: newTopicManager(),
+		topicManager: topic.NewManager(),
 	}
-	b.cls = newCluster(b)
 	return b
 }
 
@@ -33,7 +34,6 @@ func (b *Broker) Start() {
 	go b.StartTCPListen()
 	go b.StartHttpListen()
 	go b.StartWsListener()
-	go newCluster(b).start()
 	wg.Wait()
 }
 
@@ -81,11 +81,14 @@ func (b *Broker) handleConnection(conn net.Conn) {
 		panic(err)
 	}
 	cp, ok := packet.(*packets.ConnectPacket)
+
 	if !ok {
-		panic(err)
+		zap.L().Error("connection error,invalid connect packet", zap.String("packet", cp.String()))
+		return
 	}
 
 	connack := packets.NewControlPacket(packets.Connack).(*packets.ConnackPacket)
+
 	connack.SessionPresent = cp.CleanSession
 	connack.ReturnCode = cp.Validate()
 
@@ -99,16 +102,16 @@ func (b *Broker) handleConnection(conn net.Conn) {
 
 	err = connack.Write(conn)
 	if err != nil {
-		panic(err)
+		zap.L().Error("write to client error", zap.Error(err))
+		return
 	}
 
 	client := newClient(cp.ClientIdentifier, conn)
 	client.broker = b
-	client.cls = b.cls
 	b.addClient(client)
 }
 
 func (b *Broker) addClient(c *Client) {
-	b.clients.Store(c.Id, c)
+	b.clients.Set(c.Id, c)
 	c.readLoop()
 }
