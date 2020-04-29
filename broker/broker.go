@@ -108,6 +108,8 @@ func (b *Broker) handleConnection(conn net.Conn) {
 
 	client := newClient(cp.ClientIdentifier, conn)
 	client.broker = b
+	client.keepAlive = cp.Keepalive
+	client.setTimeout()
 	b.addClient(client)
 }
 
